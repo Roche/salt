@@ -296,6 +296,61 @@ def __log_binding_change(changes, type, key, new, old=None):
         changes[type] += key + ':' + old + '->' + new + '\n'
 
 
+def undeployed(name, jboss_config, undeploy):
+    '''
+    Ensures that the given application is undeployed from server.
+
+    jboss_config:
+        Dict with connection properties (see state description)
+    undeploy:
+        Regular expression to match against existing deployments. If any deployment matches the regular expression then it will be undeployed.
+
+    Example::
+
+    .. code-block:: yaml
+
+        application_undeployed:
+          jboss7.undeployed:
+           - jboss_config: {{ pillar['jboss'] }}
+           - undeploy: 'application-web-.*'
+    '''
+    log.debug(" ======================== STATE: jboss7.undeployed (name: %s) ", name)
+    ret = {'name': name,
+           'result': True,
+           'changes': {},
+           'comment': ''}
+
+    comment = ''
+
+    validate_success, validate_comment = __validate_undeploy_arguments(jboss_config, undeploy)
+    if not validate_success:
+        return _error(ret, validate_comment)
+
+    find_success, deployment, find_comment = __find_deployment_by_re(jboss_config, undeploy)
+    if not find_success:
+        return _error(ret, find_comment)
+
+    log.debug('deployment=%s', deployment)
+    if deployment is None:
+        comment = __append_comment('No deployment matching {0} was found.'.format(undeploy), comment)
+    else:
+        __salt__['jboss7.undeploy'](jboss_config, deployment)
+        ret['changes']['undeployed'] = deployment
+
+    ret['comment'] = comment
+
+    return ret
+
+
+def __validate_undeploy_arguments(jboss_config, undeploy):
+    result, comment = __check_dict_contains(jboss_config, 'jboss_config', ['cli_path', 'controller'])
+    if undeploy is None:
+        result = False
+        comment = __append_comment('No undeploy regular expression defined', comment)
+
+    return result, comment
+
+
 def deployed(name, jboss_config, artifact=None, salt_source=None):
     '''
     Ensures that the given application is deployed on server.
@@ -449,7 +504,7 @@ def deployed(name, jboss_config, artifact=None, salt_source=None):
 
     comment = ''
 
-    validate_success, validate_comment = __validate_arguments(jboss_config, artifact, salt_source)
+    validate_success, validate_comment = __validate_deploy_arguments(jboss_config, artifact, salt_source)
     if not validate_success:
         return _error(ret, validate_comment)
 
@@ -484,7 +539,7 @@ def deployed(name, jboss_config, artifact=None, salt_source=None):
     return ret
 
 
-def __validate_arguments(jboss_config, artifact, salt_source):
+def __validate_deploy_arguments(jboss_config, artifact, salt_source):
     result, comment = __check_dict_contains(jboss_config, 'jboss_config', ['cli_path', 'controller'])
     if artifact is None and salt_source is None:
         result = False
@@ -509,34 +564,38 @@ def __validate_arguments(jboss_config, artifact, salt_source):
 
 
 def __find_deployment(jboss_config, artifact=None, salt_source=None):
+    if artifact is not None:
+        undeploy = '{artifact_id}.*'.format(artifact_id=artifact['artifact_id'])
+    elif salt_source is not None and salt_source['undeploy']:
+        undeploy = salt_source['undeploy']
+
+    success, result, comment = __find_deployment_by_re(jboss_config, undeploy)
+
+    if not success:
+        if artifact is not None:
+            comment = __append_comment( "For deployments from artifactory existing deployments on JBoss are searched to find one that starts with artifact_id.\n", comment)
+        elif salt_source is not None and salt_source['undeploy']:
+            comment = __append_comment( "For deployments from Salt file system deployments on JBoss are searched to find one that matches regular expression in 'undeploy' parameter.\n" , comment)
+
+    return success, result, comment
+
+
+def __find_deployment_by_re(jboss_config, undeploy):
     result = None
     success = True
     comment = ''
     deployments = __salt__['jboss7.list_deployments'](jboss_config)
-    if artifact is not None:
-        for deployment in deployments:
-            if deployment.startswith(artifact['artifact_id']):
-                if result is not None:
-                    success = False
-                    comment = "More than one deployment's name starts with {0}. \n" \
-                              "For deployments from artifactory existing deployments on JBoss are searched to find one that starts with artifact_id.\n"\
-                              "Existing deployments: {1}".format(artifact['artifact_id'], ",".join(deployments))
-                else:
-                    result = deployment
-    elif salt_source is not None and salt_source['undeploy']:
-        deployment_re = re.compile(salt_source['undeploy'])
-        for deployment in deployments:
-            if deployment_re.match(deployment):
-                if result is not None:
-                    success = False
-                    comment = "More than one deployment matches regular expression: {0}. \n" \
-                              "For deployments from Salt file system deployments on JBoss are searched to find one that matches regular expression in 'undeploy' parameter.\n" \
-                              "Existing deployments: {1}".format(salt_source['undeploy'], ",".join(deployments))
-                else:
-                    result = deployment
+    deployment_re = re.compile(undeploy)
+    for deployment in deployments:
+        if deployment_re.match(deployment):
+            if result is not None:
+                success = False
+                comment = "More than one deployment matches regular expression: {0}. \n" \
+                          "Existing deployments: {1}".format(undeploy, ",".join(deployments))
+            else:
+                result = deployment
 
     return success, result, comment
-
 
 def __get_artifact(artifact, salt_source):
     resolved_source = None

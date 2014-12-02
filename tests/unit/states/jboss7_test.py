@@ -16,6 +16,10 @@ except NameError:
 class JBoss7StateTestCase(TestCase):
 
     org_module_functions = {}
+    jboss_config = {
+        'cli_path': '/path/to/cli',
+        'controller': '12.23.34.45'
+    }
 
     def __save_module_functions(self):
         for name, val in jboss7.__dict__.iteritems():
@@ -40,7 +44,7 @@ class JBoss7StateTestCase(TestCase):
     def tearDown(self):
         self.__restore_module_functions()
 
-    def test_should_create_new_datasource_if_not_exists(self):
+    def test_create_new_datasource_if_not_exists(self):
         # given
         datasource_properties = {'connection-url': 'jdbc:/old-connection-url'}
         ds_status = {'created': False}
@@ -66,7 +70,7 @@ class JBoss7StateTestCase(TestCase):
         self.assertFalse(__salt__['jboss7.update_datasource'].called)
         self.assertEqual(result['comment'], 'Datasource created.')
 
-    def test_should_update_the_datasource_if_exists(self):
+    def test_update_the_datasource_if_exists(self):
         ds_status = {'updated': False}
 
         def read_func(jboss_config, name):
@@ -88,7 +92,7 @@ class JBoss7StateTestCase(TestCase):
         self.assertFalse(__salt__['jboss7.create_datasource'].called)
         self.assertEqual(result['comment'], 'Datasource updated.')
 
-    def test_should_recreate_the_datasource_if_specified(self):
+    def test_recreate_the_datasource_if_specified(self):
         __salt__['jboss7.remove_datasource'].return_value = {
             'success': True
         }
@@ -107,7 +111,7 @@ class JBoss7StateTestCase(TestCase):
         self.assertEqual(result['changes']['removed'], 'appDS')
         self.assertEqual(result['changes']['created'], 'appDS')
 
-    def test_should_inform_if_the_datasource_has_not_changed(self):
+    def test_inform_if_the_datasource_has_not_changed(self):
         __salt__['jboss7.read_datasource'].return_value = {
             'success': True,
             'result': {'connection-url': 'jdbc:/old-connection-url'}
@@ -122,7 +126,7 @@ class JBoss7StateTestCase(TestCase):
         self.assertFalse(__salt__['jboss7.create_datasource'].called)
         self.assertEqual(result['comment'], 'Datasource not changed.')
 
-    def test_should_create_binding_if_not_exists(self):
+    def test_create_binding_if_not_exists(self):
         # given
         binding_status = {'created': False}
 
@@ -148,7 +152,7 @@ class JBoss7StateTestCase(TestCase):
         self.assertEqual(result['changes'], {'added': 'env:DEV\n'})
         self.assertEqual(result['comment'], 'Bindings changed.')
 
-    def test_should_update_bindings_if_exists_and_different(self):
+    def test_update_bindings_if_exists_and_different(self):
         # given
         binding_status = {'updated': False}
 
@@ -174,7 +178,7 @@ class JBoss7StateTestCase(TestCase):
         self.assertEqual(result['changes'], {'changed': 'env:DEV->DEV2\n'})
         self.assertEqual(result['comment'], 'Bindings changed.')
 
-    def test_should_not_update_bindings_if_same(self):
+    def test_not_update_bindings_if_same(self):
         # given
         __salt__['jboss7.read_simple_binding'].return_value = {'success': True, 'result': {'value': 'DEV2'}}
 
@@ -187,7 +191,7 @@ class JBoss7StateTestCase(TestCase):
         self.assertEqual(result['changes'], {})
         self.assertEqual(result['comment'], 'Bindings not changed.')
 
-    def test_should_raise_exception_if_cannot_create_binding(self):
+    def test_raise_exception_if_cannot_create_binding(self):
         def read_func(jboss_config, binding_name):
             return {'success': False, 'err_code': 'JBAS014807'}
 
@@ -204,7 +208,7 @@ class JBoss7StateTestCase(TestCase):
         except CommandExecutionError as e:
             self.assertEqual(str(e), 'Incorrect binding name.')
 
-    def test_should_raise_exception_if_cannot_update_binding(self):
+    def test_raise_exception_if_cannot_update_binding(self):
         def read_func(jboss_config, binding_name):
             return {'success': True, 'result': {'value': 'DEV'}}
 
@@ -220,3 +224,54 @@ class JBoss7StateTestCase(TestCase):
             self.fail('An exception should be thrown')
         except CommandExecutionError as e:
             self.assertEqual(str(e), 'Incorrect binding name.')
+
+
+    def test_undeploy_checks_jboss_config(self):
+        # when:
+        result = jboss7.undeployed(name="doesntmatter", jboss_config={}, undeploy='app1.*')
+
+        #then:
+        self.assertFalse(result['result'])
+        self.assertTrue('Missing cli_path in jboss_config' in result['comment'])
+        self.assertTrue('Missing controller in jboss_config' in result['comment'])
+
+
+    def test_undeploy_executes_undeployment_if_deployment_found(self):
+        def list_deployments(jboss_config):
+            return ['app1-0.9', 'app2-0.7']
+        __salt__['jboss7.list_deployments'] = MagicMock(side_effect=list_deployments)
+        __salt__['jboss7.undeploy'] = MagicMock()
+
+        # when:
+        jboss7.undeployed(name="doesntmatter", jboss_config=self.jboss_config, undeploy='app1.*')
+
+        #then:
+        __salt__['jboss7.undeploy'].assert_called_with(self.jboss_config, 'app1-0.9')
+
+
+    def test_undeploy_does_not_undeploy_if_no_deployment_found(self):
+        def list_deployments(jboss_config):
+            return ['app1-0.9', 'app2-0.7']
+        __salt__['jboss7.list_deployments'] = MagicMock(side_effect=list_deployments)
+        __salt__['jboss7.undeploy'] = MagicMock()
+
+        # when:
+        jboss7.undeployed(name="doesntmatter", jboss_config=self.jboss_config, undeploy='app3.*')
+
+        #then:
+        self.assertFalse(__salt__['jboss7.undeploy'].called)
+
+
+    def test_undeploy_returns_error_if_two_matching_deployments_exist(self):
+        def list_deployments(jboss_config):
+            return ['app1-0.9', 'app2-0.7']
+        __salt__['jboss7.list_deployments'] = MagicMock(side_effect=list_deployments)
+        __salt__['jboss7.undeploy'] = MagicMock()
+
+        # when:
+        result = jboss7.undeployed(name="doesntmatter", jboss_config=self.jboss_config, undeploy='app.*')
+
+        #then:
+        self.assertFalse(__salt__['jboss7.undeploy'].called)
+        self.assertFalse(result['result'])
+        self.assertTrue('More than one deployment matches regular expression' in result['comment'])
