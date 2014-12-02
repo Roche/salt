@@ -237,3 +237,18 @@ class JBoss7TestCase(TestCase):
         jboss7.update_datasource(self.jboss_config, 'appDS', datasource_properties)
 
         __salt__['jboss7_cli.run_operation'].assert_any_call(self.jboss_config, '/subsystem=datasources/data-source="appDS":write-attribute(name="user-name",value="newuser")', fail_on_error=False)
+
+    def test_add_authentication_one_login_module(self):
+        def cli_command_response(jboss_config, cli_command, fail_on_error=False):
+            print r'/subsystem=security/security-domain=app1Domain/authentication=classic:add(login_modules=[{"code"=>"module1","flag"=>"required","module-options"=>[("option1"=>"value1")]}])'
+            print cli_command
+        __salt__['jboss7_cli.run_operation'].side_effect = cli_command_response
+
+        login_module0_properties = OrderedDict()
+        login_module0_properties['code'] = 'module1'
+        login_module0_properties['flag'] = 'required'
+        login_module0_properties['module-options'] = [('option1', 'value1')]
+        login_modules = [login_module0_properties]
+        jboss7.add_authentication(self.jboss_config, 'app1Domain', 'classic', login_modules)
+
+        __salt__['jboss7_cli.run_operation'].assert_called_with(self.jboss_config, r'/subsystem=security/security-domain=app1Domain/authentication=classic:add(login_modules=[{"code"=>"module1","flag"=>"required","module-options"=>[("option1"=>"value1")]}])')

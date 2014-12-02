@@ -229,78 +229,111 @@ def _parse(cli_output):
 
 
 def __process_tokens(tokens):
-    result, token_no = __process_tokens_internal(tokens)
+    result, token_no = __process_dict_internal(tokens)
     return result
 
 
-def __process_tokens_internal(tokens, start_at=0):
+def __process_dict_internal(tokens, start_at=0):
     if __is_dict_start(tokens[start_at]) and start_at == 0:  # the top object
-        return __process_tokens_internal(tokens, start_at=1)
+        return __process_dict_internal(tokens, start_at=1)
 
-    log.debug("__process_tokens, start_at="+str(start_at))
+    log.debug("__process_dict_internal, start_at="+str(start_at))
     token_no = start_at
     result = {}
     current_key = None
     while token_no < len(tokens):
         token = tokens[token_no]
         log.debug("PROCESSING TOKEN %d: %s", token_no, token)
-        if __is_quoted_string(token):
-            log.debug("    TYPE: QUOTED STRING ")
-            if current_key is None:
-                current_key = __get_quoted_string(token)
-                log.debug("    KEY: %s", current_key)
-            else:
-                result[current_key] = __get_quoted_string(token)
-                log.debug("    %s -> %s", current_key, result[current_key])
-                current_key = None
-        elif __is_datatype(token):
-            log.debug("    TYPE: DATATYPE: %s ", token)
-            result[current_key] = __get_datatype(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
-            current_key = None
-        elif __is_boolean(token):
-            log.debug("    TYPE: BOOLEAN ")
-            result[current_key] = __get_boolean(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
-            current_key = None
-        elif __is_int(token):
-            log.debug("    TYPE: INT ")
-            result[current_key] = __get_int(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
-            current_key = None
-        elif __is_long(token):
-            log.debug("    TYPE: LONG ")
-            result[current_key] = __get_long(token)
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
-            current_key = None
-        elif __is_undefined(token):
-            log.debug("    TYPE: UNDEFINED ")
-            log.debug("    %s -> undefined (Adding as None to map)", current_key)
-            result[current_key] = None
-            current_key = None
-        elif __is_dict_start(token):
-            log.debug("    TYPE: DICT START")
-            dict_value, token_no = __process_tokens_internal(tokens, start_at=token_no+1)
-            log.debug("    DICT = %s ", dict_value)
-            result[current_key] = dict_value
-            log.debug("    %s -> %s", current_key, str(result[current_key]))
-            current_key = None
-        elif __is_dict_end(token):
-            log.debug("    TYPE: DICT END")
+        if __is_dict_end(token):
             return result, token_no
+
+        value, token_no = __process_token(tokens, token_no)
+        if __is_quoted_string(token) and current_key is None:
+            current_key = value
+            log.debug("    KEY: %s", current_key)
         elif __is_assignment(token):
-            log.debug("    TYPE: ASSIGNMENT")
-            is_assignment = True
+            log.debug("    YTYPE: ASSIGNMENT")
         else:
-            raise CommandExecutionError('Unknown token!', 'Token:'+token)
+            result[current_key] = value
+            log.debug("    %s -> %s", current_key, str(result[current_key]))
+            current_key = None
 
         token_no = token_no + 1
+
+    return result, token_no
+
+def __create_array_internal(tokens, start_at=0):
+    log.debug("__create_array_internal, start_at="+str(start_at))
+    token_no = start_at
+    result = []
+    while token_no < len(tokens):
+        token = tokens[token_no]
+        if __is_array_end(token):
+            log.debug("    TYPE: ARRAY END")
+            return result, token_no
+
+        value, token_no = __process_token(tokens, token_no)
+        result.append(value)
+
+        token_no = token_no + 1
+
+
+def __create_tuple_internal(tokens, start_at=0):
+    log.debug("__create_tuple_internal, start_at="+str(start_at))
+    token_no = start_at
+    result = ()
+    while token_no < len(tokens):
+        token = tokens[token_no]
+        if __is_tuple_end(token):
+            log.debug("    TYPE: TUPLE END")
+            return result, token_no
+
+        if not __is_assignment(token):
+            value, token_no = __process_token(tokens, token_no)
+            result = result + (value,)
+
+        token_no = token_no + 1
+
+def __process_token(tokens, token_no):
+    token = tokens[token_no]
+    if __is_quoted_string(token):
+        log.debug("    TYPE: QUOTED STRING ")
+        return __get_quoted_string(token), token_no
+    elif __is_datatype(token):
+        log.debug("    TYPE: DATATYPE: %s ", token)
+        return __get_datatype(token), token_no
+    elif __is_boolean(token):
+        log.debug("    TYPE: BOOLEAN ")
+        return __get_boolean(token), token_no
+    elif __is_int(token):
+        log.debug("    TYPE: INT ")
+        return __get_int(token), token_no
+    elif __is_long(token):
+        log.debug("    TYPE: LONG ")
+        return __get_long(token), token_no
+    elif __is_undefined(token):
+        log.debug("    TYPE: UNDEFINED ")
+        return None, token_no
+    elif __is_dict_start(token):
+        log.debug("    TYPE: DICT START")
+        return __process_dict_internal(tokens, start_at=token_no+1)
+    elif __is_array_start(token):
+        log.debug("    TYPE: ARRAY START")
+        return __create_array_internal(tokens, start_at=token_no+1)
+    elif __is_tuple_start(token):
+        log.debug("    TYPE: TUPLE START")
+        return __create_tuple_internal(tokens, start_at=token_no+1)
+    elif __is_assignment(token):
+        log.debug("    TYPE: ASSIGNMENT")
+        return None, token_no
+    else:
+        raise CommandExecutionError('Unknown token!', 'Token:'+token)
 
 
 def __tokenize(cli_output):
     # add all possible tokens here
     # \\ means a single backslash here
-    tokens_re = re.compile(r'("(?:[^"\\]|\\"|\\\\)*"|=>|{|}|true|false|undefined|[0-9A-Za-z]+)', re.DOTALL)
+    tokens_re = re.compile(r'("(?:[^"\\]|\\"|\\\\)*"|=>|{|}|\[|\]|\(|\)|true|false|undefined|[0-9A-Za-z]+)', re.DOTALL)
     tokens = tokens_re.findall(cli_output)
     log.debug("tokens=%s", str(tokens))
     return tokens
@@ -313,6 +346,17 @@ def __is_dict_start(token):
 def __is_dict_end(token):
     return token == '}'
 
+def __is_array_start(token):
+    return token == '['
+
+def __is_array_end(token):
+    return token == ']'
+
+def __is_tuple_start(token):
+    return token == '('
+
+def __is_tuple_end(token):
+    return token == ')'
 
 def __is_boolean(token):
     return token == 'true' or token == 'false'
@@ -361,4 +405,4 @@ def __get_quoted_string(token):
 
 
 def __is_assignment(token):
-    return '=>'
+    return token == '=>'

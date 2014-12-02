@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 import re
 import __builtin__
-
+import logging
+import sys
 from salt.modules import jboss7_cli
 from salt.exceptions import CommandExecutionError
 
@@ -80,6 +81,15 @@ class JBoss7CliTestCase(TestCase):
         if 'cmd.run_all' in __salt__:
             self.org_cmd_run_all = __salt__['cmd.run_all']
         __salt__['cmd.run_all'] = self.cmd.run_all
+
+        root = logging.getLogger()
+        root.setLevel(logging.DEBUG)
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        ch.setFormatter(formatter)
+        root.handlers = []
+        root.addHandler(ch)
 
     def tearDown(self):
         if self.org_cmd_run_all is not None:
@@ -431,3 +441,42 @@ class JBoss7CliTestCase(TestCase):
         jboss7_cli.run_operation(self.jboss_config, operation)
 
         self.assertEqual(self.cmd.get_last_command(), r'/opt/jboss/jboss-eap-6.0.1/bin/jboss-cli.sh --connect --controller="123.234.345.456:9999" --user="jbossadm" --password="jbossadm" --command="/subsystem=naming/binding=\"java:/sampleapp/web-module/ldap/username\":add(binding-type=simple, value=\"DOMAIN\\\\\\\\user\")"')
+
+    def test_read_authentication_login_modules(self):
+        cli_output = r'''{
+            "outcome" => "success",
+            "result" => [
+                {
+                    "code" => "ldapModule",
+                    "flag" => "required",
+                    "module-options" => [
+                        ("java.naming.provider.url" => "ldap://ldap.company.com"),
+                        ("bindDN" => "DOMAIN\\user")
+                    ]
+                },
+                {
+                    "code" => "otherModule",
+                    "flag" => "optional",
+                    "module-options" => [
+                        ("property1" => "value1")
+                    ]
+                }
+            ]
+        }
+        '''
+
+        result = jboss7_cli._parse(cli_output)
+
+        self.assertEqual(result['outcome'], 'success')
+        self.assertEqual(len(result['result']),2)
+        self.assertEqual(result['result'][0]['code'], 'ldapModule')
+        self.assertEqual(result['result'][0]['flag'], 'required')
+        module_options_0 = result['result'][0]['module-options']
+        self.assertEqual(len(module_options_0), 2)
+        self.assertTrue(('java.naming.provider.url', 'ldap://ldap.company.com') in module_options_0)
+        self.assertTrue(('bindDN', r'DOMAIN\user') in module_options_0)
+
+        self.assertEqual(result['result'][1]['code'], 'otherModule')
+        self.assertEqual(result['result'][1]['flag'], 'optional')
+
+

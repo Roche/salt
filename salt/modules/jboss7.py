@@ -419,3 +419,55 @@ def undeploy(jboss_config, deployment):
     log.debug("======================== MODULE FUNCTION: jboss7.undeploy, deployment=%s", deployment)
     command = 'undeploy {deployment} '.format(deployment=deployment)
     return __salt__['jboss7_cli.run_command'](jboss_config, command)
+
+
+def add_authentication(jboss_config, name, type, login_modules):
+    '''
+    Add new authentication
+
+    jboss_config
+        Configuration dictionary with properties specified above.
+    name
+        Security domain
+    type
+        Authentication type (for example classic)
+    login_modules
+        A dictionary with properties for login module
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' jboss7.add_authentication '{"cli_path": "/opt/jboss/bin/jboss-cli.sh", "controller": "10.11.12.13:9999", "cli_user": "jbossadm", "cli_password": "jbossadm"}' app1Domain type=classic login_modules='[{"code":"ldapModule", "module-options":[("property1":"value1")]}]'
+       '''
+    log.debug("======================== MODULE FUNCTION: jboss7.add_authentication, name=%s", name)
+
+    login_modules_as_strings = []
+    for login_module in login_modules:
+        login_modules_as_strings.append(__get_login_module_as_string(login_module))
+    login_modules_as_string = ','.join(login_modules_as_strings)
+
+    operation = '/subsystem=security/security-domain={name}/authentication={type}:add(login-modules=[{login_modules_as_string}])'.format(
+        name=name, type=type, login_modules_as_string=login_modules_as_string
+    )
+    return __salt__['jboss7_cli.run_operation'](jboss_config, operation)
+
+
+def __get_login_module_as_string(login_module):
+    login_module_properties_strings = []
+    for key,value in login_module.iteritems():
+        login_module_properties_strings.append('"{key}"=>{value}'.format(key=key, value=__get_login_module_property_as_string(value)))
+    return '{{{module_properties}}}'.format(module_properties=','.join(login_module_properties_strings))
+
+
+def __get_login_module_property_as_string(value):
+    if type(value) is str:
+        return '"{value}"'.format(value=value)
+    if type(value) is list:
+        return '[{list_property}]'.format(list_property=__get_login_module_list_property_as_string(value))
+
+def __get_login_module_list_property_as_string(module_properties):
+    module_properties_strings = []
+    for module_property in module_properties:
+        module_properties_strings.append('("{value1}"=>"{value2}")'.format(value1=module_property[0], value2=module_property[1]))
+    return ','.join(module_properties_strings)
